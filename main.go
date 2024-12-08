@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -42,6 +43,38 @@ type Shape struct {
 type CaptchaData struct {
 	Shapes   []Shape `json:"shapes"`
 	Sequence string  `json:"sequence"` // Add this field
+}
+
+func generateUniqueKey() string {
+	timestamp := time.Now().UnixNano()
+	random := rand.Intn(10000)
+	return fmt.Sprintf("captcha:%d:%d", timestamp, random)
+}
+
+// Ֆունկցիա բանալու յունիքությունը ստուգելու համար
+func getUniqueRedisKey(baseKey string) string {
+	counter := 1
+	newKey := baseKey
+
+	// Ստուգում ենք արդյոք բանալին գոյություն ունի
+	for {
+		exists, err := rdb.Exists(ctx, newKey).Result()
+		if err != nil {
+			log.Printf("Error checking key existence: %v", err)
+			return baseKey // Սխալի դեպքում վերադարձնում ենք սկզբնական բանալին
+		}
+
+		if exists == 0 {
+			// Բանալին գոյություն չունի, կարող ենք օգտագործել
+			break
+		}
+
+		// Եթե բանալին գոյություն ունի, ավելացնում ենք հերթական համար
+		newKey = fmt.Sprintf("%s:%d", baseKey, counter)
+		counter++
+	}
+
+	return newKey
 }
 
 func drawShape(gc *draw2dimg.GraphicContext, shapeType ShapeType, x, y float64, size float64) {
@@ -205,29 +238,44 @@ func main() {
 	r := gin.Default()
 
 	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173") // Ճիշտ հասցեն
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		// Այստեղ պետք է ավելացնել X-Captcha-Key
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Captcha-Key") // Փոխված տող
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Captcha-Key") // Ավելացված տող
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
 		}
-
 		c.Next()
 	})
 
 	r.GET("/api/captcha", func(c *gin.Context) {
 		captchaData, imgBytes := generateCaptcha()
-		captchaJSON, _ := json.Marshal(captchaData)
-		rdb.Set(ctx, "shapecaptcha", string(captchaJSON), 5*time.Minute)
 
+		// Ստեղծում ենք յունիք բանալի
+		baseKey := generateUniqueKey()
+		redisKey := getUniqueRedisKey(baseKey)
+
+		captchaJSON, _ := json.Marshal(captchaData)
+		rdb.Set(ctx, redisKey, string(captchaJSON), 5*time.Minute)
+
+		c.Header("X-Captcha-Key", redisKey)
 		c.Header("Content-Type", "image/png")
 		c.Data(http.StatusOK, "image/png", imgBytes)
 	})
 
 	r.POST("/api/verify", func(c *gin.Context) {
+
+		// Ստանում ենք բանալին request-ից
+		captchaKey := c.GetHeader("X-Captcha-Key")
+		if captchaKey == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Captcha key is required"})
+			return
+		}
+
 		var userSequence [][]int
 		if err := c.BindJSON(&userSequence); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -238,7 +286,7 @@ func main() {
 			return
 		}
 
-		storedCaptchaJSON, err := rdb.Get(ctx, "shapecaptcha").Result()
+		storedCaptchaJSON, err := rdb.Get(ctx, captchaKey).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"valid":     false,
@@ -284,11 +332,21 @@ func main() {
 			}[correct],
 			"userInput": userSequence,
 		})
+		rdb.Del(ctx, captchaKey)
 	})
 
 	r.GET("/api/sequence", func(c *gin.Context) {
+
+		// Ստանում ենք բանալին query-ից
+		captchaKey := c.GetHeader("X-Captcha-Key")
+		if captchaKey == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Captcha key is required",
+			})
+			return
+		}
 		// Ստանում ենք պահպանված տվյալները Redis-ից
-		storedCaptchaJSON, err := rdb.Get(ctx, "shapecaptcha").Result()
+		storedCaptchaJSON, err := rdb.Get(ctx, captchaKey).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "No captcha data found",
