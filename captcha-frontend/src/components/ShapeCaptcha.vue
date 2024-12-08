@@ -1,13 +1,19 @@
 <template>
     <div class="flex flex-col items-center gap-4 p-4">
-      <h2 class="text-xl font-bold mb-4">Shape CAPTCHA</h2>
+      <h2 class="text-xl font-bold mb-4">Նկարների CAPTCHA</h2>
+  
+      <!-- Sequence Display -->
+      <div v-if="sequence" class="text-lg mb-4 font-medium text-gray-700 bg-blue-50 p-3 rounded-lg">
+        <span class="block text-center">Հերթականությունը՝</span>
+        <span class="block text-center font-bold mt-1">{{ sequence }}</span>
+      </div>
       
       <!-- CAPTCHA Grid -->
       <div class="relative" ref="captchaContainer">
         <img 
           :src="captchaImageUrl" 
           alt="CAPTCHA" 
-          class="border border-gray-300 rounded"
+          class="rounded shadow-md"
           @load="setupGrid"
         />
         
@@ -23,7 +29,7 @@
           <div
             v-for="i in 24"
             :key="i"
-            class="border border-transparent hover:border-blue-400 cursor-pointer relative"
+            class="cursor-pointer relative hover:bg-blue-100 hover:bg-opacity-20"
             @click="handleCellClick(Math.floor((i-1)/6), (i-1)%6)"
           >
             <div 
@@ -42,14 +48,14 @@
           @click="refreshCaptcha"
           class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded"
         >
-          Refresh
+          Թարմացնել
         </button>
         <button 
           @click="verify"
           :disabled="selectedCells.length !== 3"
           class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
         >
-          Verify
+          Ստուգել
         </button>
       </div>
   
@@ -75,17 +81,49 @@
         selectedCells: [],
         message: '',
         valid: false,
-        imageWidth: 300,  // Modified for 4x6 aspect ratio
+        imageWidth: 300,
         imageHeight: 200,
+        sequence: '',
       }
     },
     methods: {
-      async refreshCaptcha() {
-        this.selectedCells = []
-        this.message = ''
-        this.valid = false
-        this.captchaImageUrl = `http://localhost:8080/api/captcha?t=${Date.now()}`
+      async getSequence() {
+        try {
+          const response = await fetch('http://localhost:8080/api/sequence')
+          const data = await response.json()
+          this.sequence = data.sequence
+        } catch (error) {
+          console.error('Error fetching sequence:', error)
+        }
       },
+  
+      async refreshCaptcha() {
+    this.selectedCells = []
+    this.message = ''
+    this.valid = false
+    
+    try {
+        // Առաջին հերթին գեներացնում ենք նոր CAPTCHA
+        const timestamp = Date.now()
+        const captchaResponse = await fetch(`http://localhost:8080/api/captcha?t=${timestamp}`)
+        if (!captchaResponse.ok) {
+            throw new Error('Failed to generate new CAPTCHA')
+        }
+        const blob = await captchaResponse.blob()
+        this.captchaImageUrl = URL.createObjectURL(blob)
+
+        // Հետո միայն ստանում ենք sequence-ը
+        await new Promise(resolve => setTimeout(resolve, 100)) // Փոքր դադար
+        const sequenceResponse = await fetch('http://localhost:8080/api/sequence')
+        const data = await sequenceResponse.json()
+        if (data.sequence) {
+            this.sequence = data.sequence
+        }
+    } catch (error) {
+        console.error('Error refreshing CAPTCHA:', error)
+        this.message = 'Սխալ CAPTCHA-ի բեռնման ժամանակ'
+    }
+    },
       
       setupGrid() {
         if (this.$refs.captchaContainer) {
@@ -101,7 +139,6 @@
         )
         
         if (index !== -1) {
-          // Remove this cell and any subsequent selections
           this.selectedCells = this.selectedCells.slice(0, index)
         } else if (this.selectedCells.length < 3) {
           this.selectedCells.push([row, col])
@@ -139,11 +176,14 @@
           
           if (result.valid) {
             this.$emit('captcha-success')
+            this.message = 'Ճիշտ է!'
           } else {
+            this.message = 'Սխալ է։ Փորձեք կրկին։'
             setTimeout(() => this.refreshCaptcha(), 1500)
           }
         } catch (error) {
-          this.message = 'Error verifying CAPTCHA'
+          console.error('Error verifying CAPTCHA:', error)
+          this.message = 'Սխալ ստուգման ժամանակ'
           this.valid = false
         }
       }

@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,7 +40,8 @@ type Shape struct {
 }
 
 type CaptchaData struct {
-	Shapes []Shape `json:"shapes"`
+	Shapes   []Shape `json:"shapes"`
+	Sequence string  `json:"sequence"` // Add this field
 }
 
 func drawShape(gc *draw2dimg.GraphicContext, shapeType ShapeType, x, y float64, size float64) {
@@ -122,6 +124,7 @@ func createCaptchaWithBackground(img *image.RGBA) (CaptchaData, []byte) {
 	cellWidth := width / 6
 	cellHeight := height / 4
 
+	// Generate grid positions
 	positions := make([][]int, 0)
 	for i := 0; i < 4; i++ {
 		for j := 0; j < 6; j++ {
@@ -132,11 +135,20 @@ func createCaptchaWithBackground(img *image.RGBA) (CaptchaData, []byte) {
 		positions[i], positions[j] = positions[j], positions[i]
 	})
 
-	shapes := make([]Shape, 3)
+	// Create and shuffle shape types for random order
 	shapeTypes := []ShapeType{Circle, Square, Triangle}
+	rand.Shuffle(len(shapeTypes), func(i, j int) {
+		shapeTypes[i], shapeTypes[j] = shapeTypes[j], shapeTypes[i]
+	})
+
+	// Create shapes array
+	shapes := make([]Shape, 3)
+
+	// Create sequence description
+	sequence := make([]string, 3)
 
 	// Draw shapes with clear outline
-	gc.SetStrokeColor(color.RGBA{0, 0, 0, 255})
+	gc.SetStrokeColor(color.RGBA{0, 0, 0, 255}) // Black outline
 	gc.SetLineWidth(2)
 
 	for i := 0; i < 3; i++ {
@@ -146,6 +158,16 @@ func createCaptchaWithBackground(img *image.RGBA) (CaptchaData, []byte) {
 			Row:      pos[0],
 			Col:      pos[1],
 			Position: i + 1,
+		}
+
+		// Add shape name to sequence
+		switch shapeTypes[i] {
+		case Circle:
+			sequence[i] = "Circle"
+		case Square:
+			sequence[i] = "Square"
+		case Triangle:
+			sequence[i] = "Triangle"
 		}
 
 		x := float64(pos[1]) * cellWidth
@@ -158,7 +180,11 @@ func createCaptchaWithBackground(img *image.RGBA) (CaptchaData, []byte) {
 	png.Encode(buf, img)
 	imgBytes = buf.Bytes()
 
-	return CaptchaData{Shapes: shapes}, imgBytes
+	// Return both the shapes data and the sequence
+	return CaptchaData{
+		Shapes:   shapes,
+		Sequence: strings.Join(sequence, " → "),
+	}, imgBytes
 }
 
 func main() {
@@ -257,6 +283,34 @@ func main() {
 				false: "Incorrect sequence",
 			}[correct],
 			"userInput": userSequence,
+		})
+	})
+
+	r.GET("/api/sequence", func(c *gin.Context) {
+		// Ստանում ենք պահպանված տվյալները Redis-ից
+		storedCaptchaJSON, err := rdb.Get(ctx, "shapecaptcha").Result()
+		if err == redis.Nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "No captcha data found",
+			})
+			return
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to get sequence",
+			})
+			return
+		}
+
+		var storedCaptcha CaptchaData
+		if err := json.Unmarshal([]byte(storedCaptchaJSON), &storedCaptcha); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to parse sequence data",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"sequence": storedCaptcha.Sequence,
 		})
 	})
 
