@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styling for light/dark mode and basic elements */
+@layer base {
+  :root {
+    @apply bg-white text-gray-900;
+  }
+
+  :root[class~="dark"] {
+    @apply bg-gray-900 text-white;
+  }
+
+  body {
+    @apply min-h-screen m-0 flex items-center justify-center min-w-[320px];
+    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button {
+    @apply rounded-lg border border-transparent px-4 py-2 text-base font-medium
+           bg-gray-100 hover:border-blue-500 dark:bg-gray-800
+           transition-colors duration-200 cursor-pointer;
+  }
+
+  button:focus,
+  button:focus-visible {
+    @apply outline-none ring-2 ring-blue-500;
+  }
+
+  #app {
+    @apply max-w-5xl mx-auto p-8 text-center;
+  }
+}
